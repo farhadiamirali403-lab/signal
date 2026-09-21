@@ -8,3 +8,4 @@ __pycache__/
 images/
 dryrun.db
 sessions/
+config.yaml

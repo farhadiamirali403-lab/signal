@@ -147,7 +147,10 @@ def load_settings(
     load_dotenv(ROOT / ".env")
     path = Path(config_path) if config_path else ROOT / "config.yaml"
     if not path.exists():
-        raise SystemExit(f"فایل تنظیمات پیدا نشد: {path}")
+        example = path.parent / "config.example.yaml"
+        hint = ("\nاز روی نمونه بسازش:  cp config.example.yaml config.yaml"
+                if example.exists() else "")
+        raise SystemExit(f"فایل تنظیمات پیدا نشد: {path}{hint}")
     raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
     tg_raw = raw.get("telegram", {})

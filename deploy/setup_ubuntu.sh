@@ -34,7 +34,15 @@ pip install -r requirements.txt --quiet
 if [ $? -ne 0 ]; then bad "نصب کتابخانه‌ها ناموفق بود"; exit 1; fi
 green "کتابخانه‌ها نصب شدند (MetaTrader5 روی لینوکس رد می‌شود، طبیعی است)"
 
-step "۳) فایل .env"
+step "۳) فایل تنظیمات"
+if [ ! -f config.yaml ]; then
+    cp config.example.yaml config.yaml
+    green "config.yaml از روی نمونه ساخته شد"
+else
+    green "config.yaml موجود است"
+fi
+
+step "۴) فایل .env"
 if [ ! -f .env ]; then
     cp .env.example .env
     warn ".env ساخته شد ولی خالی است."
@@ -54,7 +62,7 @@ for key in TG_API_ID TG_API_HASH TG_BOT_TOKEN GEMINI_API_KEY \
 done
 [ "$missing" -eq 1 ] && { warn "اول این‌ها را در .env پر کن:  nano .env"; exit 1; }
 
-step "۴) پراکسی Gemini"
+step "۵) پراکسی Gemini"
 if grep -qE "^\s*GEMINI_PROXY\s*=\s*\S" .env; then
     warn "GEMINI_PROXY فعال است. این سرور خارج از ایران است، پس احتمالاً لازم نیست."
     warn "اگر check_vision خطا داد، آن خط را با # کامنت کن."
@@ -62,7 +70,7 @@ else
     green "پراکسی خاموش است"
 fi
 
-step "۵) توکن cTrader"
+step "۶) توکن cTrader"
 token=$(grep -E "^\s*CTRADER_ACCESS_TOKEN\s*=" .env | head -1 | cut -d= -f2- | xargs)
 if [ -z "$token" ]; then
     warn "هنوز توکن نگرفته‌ای. الان اجرا می‌شود:"
@@ -72,13 +80,13 @@ else
     green "توکن موجود است"
 fi
 
-step "۶) تست اتصال به بروکر"
+step "۷) تست اتصال به بروکر"
 python tools/check_broker.py || warn "اتصال بروکر برقرار نشد — خروجی بالا را ببین"
 
-step "۷) تست خواندن عکس"
+step "۸) تست خواندن عکس"
 python tools/check_vision.py || warn "Gemini جواب نداد — خروجی بالا را ببین"
 
-step "۸) ورود تلگرام"
+step "۹) ورود تلگرام"
 if [ -f sessions/user.session ]; then
     green "نشست تلگرام از قبل روی این سرور هست"
 else

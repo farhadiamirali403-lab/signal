@@ -34,7 +34,15 @@ python -m pip install -r requirements.txt --quiet
 if ($LASTEXITCODE -ne 0) { Bad "نصب کتابخانه‌ها ناموفق بود"; exit 1 }
 Ok "کتابخانه‌ها نصب شدند"
 
-Step 3 "بررسی فایل .env"
+Step 3 "فایل تنظیمات"
+if (-not (Test-Path "config.yaml")) {
+    Copy-Item "config.example.yaml" "config.yaml"
+    Ok "config.yaml از روی نمونه ساخته شد"
+} else {
+    Ok "config.yaml موجود است"
+}
+
+Step 4 "بررسی فایل .env"
 if (-not (Test-Path ".env")) {
     if (Test-Path ".env.example") {
         Copy-Item ".env.example" ".env"
@@ -47,8 +55,15 @@ if (-not (Test-Path ".env")) {
 }
 
 $envText = Get-Content ".env" -Raw
-$required = @("TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "GEMINI_API_KEY",
-              "MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
+$broker = (Get-Content "config.yaml" | Where-Object { $_ -match "^\s*broker\s*:" }) -replace ".*:\s*", ""
+$broker = $broker.Trim()
+Ok "بروکر: $broker"
+$required = @("TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "GEMINI_API_KEY")
+if ($broker -eq "ctrader") {
+    $required += @("CTRADER_CLIENT_ID", "CTRADER_CLIENT_SECRET")
+} else {
+    $required += @("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
+}
 $placeholders = @("1234567", "your_api_hash_here", "123456:AAA...", "AIza...",
                   "12345678", "your_password")
 foreach ($key in $required) {
@@ -67,7 +82,7 @@ foreach ($key in $required) {
     }
 }
 
-Step 4 "پراکسی Gemini"
+Step 5 "پراکسی Gemini"
 if ($envText -match "(?m)^\s*GEMINI_PROXY\s*=\s*\S") {
     Warn "GEMINI_PROXY فعال است. اگر این سرور خارج از ایران است، آن خط را کامنت کن (# اولش)."
 } else {
@@ -82,19 +97,26 @@ if ($problems.Count -gt 0) {
     exit 1
 }
 
-Step 5 "تست اتصال متاتریدر"
-python tools\check_mt5.py
+Step 6 "تست اتصال به بروکر"
+if ($broker -eq "ctrader") {
+    $token = ($envText -split "`n" | Where-Object { $_ -match "^\s*CTRADER_ACCESS_TOKEN\s*=\s*\S" })
+    if (-not $token) {
+        Warn "هنوز توکن cTrader نگرفته‌ای. الان اجرا می‌شود:"
+        python tools\ctrader_auth.py
+    }
+}
+python tools\check_broker.py
 if ($LASTEXITCODE -ne 0) {
-    Warn "متاتریدر جواب نداد. ترمینال را باز کن، وارد حساب شو، و Algo Trading را روشن کن."
+    Warn "اتصال بروکر برقرار نشد — خروجی بالا را ببین."
 }
 
-Step 6 "تست خواندن عکس (Gemini)"
+Step 7 "تست خواندن عکس (Gemini)"
 python tools\check_vision.py
 if ($LASTEXITCODE -ne 0) {
     Warn "Gemini جواب نداد — خروجی بالا می‌گوید مشکل از کلید است یا از شبکه."
 }
 
-Step 7 "ورود تلگرام"
+Step 8 "ورود تلگرام"
 if (Test-Path "sessions\user.session") {
     Ok "نشست تلگرام از قبل روی این سرور هست"
 } else {

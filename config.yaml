@@ -1,0 +1,84 @@
+# کدام بروکر: mt5 (ویندوز، از راه ترمینال) یا ctrader (مستقیم، هر سیستمی)
+broker: ctrader
+
+ctrader:
+  # false = حساب دمو. تا وقتی مطمئن نشده‌ای همین بماند.
+  live: false
+
+telegram:
+  # کانال منبع سیگنال: یوزرنیم (@name) یا آیدی عددی (-1001234567890)
+  # با اجرای  python tools/list_chats.py  می‌تونی آیدی دقیق رو پیدا کنی
+  source_channel: "@CHANGE_ME"
+  # آیدی عددی خودت در تلگرام؛ پنل تایید و هشدارها اینجا فرستاده می‌شه
+  # با /start دادن به ربات کنترل، آیدی‌ات توی لاگ چاپ می‌شه
+  control_chat_id: 0
+
+trading:
+  mode: "auto"               # confirm = با تایید دستی | auto = خودکار
+  risk_percent: 1.0          # درصد ریسک از بالانس روی هر سیگنال
+  max_lot: 1.0
+  max_open_positions: 15   # هر تارگت یک پوزیشن جداست، پس سخاوتمند باشد
+  max_daily_loss_percent: 5.0
+  require_sl: true           # سیگنال بدون حد ضرر رد بشه
+  tp_strategy: "split"       # split = تقسیم حجم بین TPها | first | last
+  max_tps: 6
+  # اگر حجم حساب کشش همه‌ی تارگت‌ها را نداشت، کدام‌ها انتخاب شوند:
+  #   nearest  = نزدیک‌ترین‌ها (سود زودتر قفل می‌شود)
+  #   spread   = پخش یکنواخت، شامل نزدیک‌ترین و دورترین
+  #   farthest = دورترین‌ها
+  tp_selection: nearest
+  entry_zone: "mid"          # برای رنج ورود: mid | best | worst
+  # اگر فاصله‌ی قیمت ورود تا قیمت فعلی کمتر از این مقدار (به پیپ) باشه،
+  # مارکت اجرا می‌شه؛ وگرنه اردر پندینگ (limit/stop) گذاشته می‌شه
+  market_threshold_pips: 15
+  max_slippage_pips: 5       # حداکثر لغزش قابل قبول هنگام اجرای مارکت
+  max_signal_age_seconds: 300  # سیگنال قدیمی‌تر از این، اجرا نشه
+  pending_expiry_hours: 12
+  deviation_points: 30
+  magic: 778899
+
+symbols:
+  # نام داخل سیگنال -> نماد پایه بروکر (پسوند حساب خودکار تشخیص داده می‌شه)
+  aliases:
+    GOLD: XAUUSD
+    XAUUSD: XAUUSD
+    XAU: XAUUSD
+    "طلا": XAUUSD
+    "انس": XAUUSD
+    SILVER: XAGUSD
+    XAGUSD: XAGUSD
+    EURUSD: EURUSD
+    GBPUSD: GBPUSD
+    USDJPY: USDJPY
+    AUDUSD: AUDUSD
+    USDCAD: USDCAD
+    USDCHF: USDCHF
+    NZDUSD: NZDUSD
+    EURJPY: EURJPY
+    GBPJPY: GBPJPY
+    EURGBP: EURGBP
+    US30: US30
+    DOW: US30
+    NAS100: NAS100
+    NASDAQ: NAS100
+    SPX500: SPX500
+    BTCUSD: BTCUSD
+    ETHUSD: ETHUSD
+  # فقط این نمادها اجازه‌ی معامله دارن (خالی = همه)
+  whitelist:
+    - XAUUSD
+
+logging:
+  level: INFO
+  file: logs/signalbot.log
+
+vision:
+  # سیگنال‌ها به صورت عکس می‌آیند، پس این باید روشن باشد
+  enabled: true
+  # gemini-2.5-pro دقیق‌تر است؛ gemini-2.5-flash سریع‌تر و ارزان‌تر.
+  # با  python tools/check_vision.py  ببین کلیدت کدام‌ها را پشتیبانی می‌کند.
+  model: gemini-3.5-flash
+  # اگر اطمینان مدل از خواندن اعداد کمتر از این باشد، سیگنال اجرا نمی‌شود
+  min_confidence: 0.8
+  # نگه داشتن یک کپی از عکس‌ها در images/ برای بررسی بعدی
+  save_images: true

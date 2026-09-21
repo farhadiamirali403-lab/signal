@@ -1,0 +1,10 @@
+.env
+*.session
+*.session-journal
+state.db
+logs/
+__pycache__/
+*.pyc
+images/
+dryrun.db
+sessions/

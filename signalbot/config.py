@@ -137,6 +137,7 @@ ALL_SECTIONS = ("telegram", "broker", "vision")
 def load_settings(
     config_path: Path | str | None = None,
     require: tuple[str, ...] = ALL_SECTIONS,
+    allow_example: bool = False,
 ) -> Settings:
     """تنظیمات را می‌خواند.
 
@@ -146,6 +147,9 @@ def load_settings(
     """
     load_dotenv(ROOT / ".env")
     path = Path(config_path) if config_path else ROOT / "config.yaml"
+    if config_path is None and not path.exists() and allow_example:
+        # پنل تلگرامی بدون config.yaml هم کار می‌کند: پیش‌فرض‌ها از نمونه
+        path = ROOT / "config.example.yaml"
     if not path.exists():
         example = path.parent / "config.example.yaml"
         hint = ("\nاز روی نمونه بسازش:  cp config.example.yaml config.yaml"

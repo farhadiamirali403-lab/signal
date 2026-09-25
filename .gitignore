@@ -9,3 +9,4 @@ images/
 dryrun.db
 sessions/
 config.yaml
+panel.json

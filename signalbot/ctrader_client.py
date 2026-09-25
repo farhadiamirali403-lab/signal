@@ -55,6 +55,52 @@ def _start_reactor() -> Any:
     return reactor
 
 
+def list_accounts(client_id: str, client_secret: str, access_token: str) -> list:
+    """حساب‌های معاملاتی متصل به یک توکن (دمو و واقعی) را برمی‌گرداند.
+
+    از همان reactor مشترک استفاده می‌کند، چون reactor توییستد فقط یک بار در
+    هر پروسه قابل اجراست و ربات بعداً برای معامله دوباره به آن نیاز دارد.
+    """
+    from ctrader_open_api import Client, EndPoints, Protobuf, TcpProtocol
+    from ctrader_open_api.messages import OpenApiMessages_pb2 as M
+    from twisted.internet.threads import blockingCallFromThread
+
+    reactor = _start_reactor()
+    connected = threading.Event()
+    client = Client(EndPoints.PROTOBUF_DEMO_HOST, EndPoints.PROTOBUF_PORT, TcpProtocol)
+    client.setConnectedCallback(lambda _c: connected.set())
+    blockingCallFromThread(reactor, client.startService)
+    try:
+        if not connected.wait(timeout=30):
+            raise BrokerError("اتصال به سرور cTrader برقرار نشد")
+
+        def send(message):
+            deferred = client.send(message, responseTimeoutInSeconds=20)
+            deferred.addCallback(Protobuf.extract)
+            return deferred
+
+        app_auth = M.ProtoOAApplicationAuthReq()
+        app_auth.clientId = client_id
+        app_auth.clientSecret = client_secret
+        try:
+            blockingCallFromThread(reactor, send, app_auth)
+        except Exception as exc:  # noqa: BLE001
+            raise BrokerError("Client ID یا Secret اشتباه است") from exc
+
+        req = M.ProtoOAGetAccountListByAccessTokenReq()
+        req.accessToken = access_token
+        try:
+            response = blockingCallFromThread(reactor, send, req)
+        except Exception as exc:  # noqa: BLE001
+            raise BrokerError(f"لیست حساب‌ها گرفته نشد: {exc}") from exc
+        return list(getattr(response, "ctidTraderAccount", []))
+    finally:
+        try:
+            blockingCallFromThread(reactor, client.stopService)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @dataclass
 class CTraderSymbol:
     """مشخصات نماد با همان نام فیلدهای متاتریدر، تا BrokerMath دست‌نخورده کار کند."""

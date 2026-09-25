@@ -43,7 +43,9 @@ class PendingUpdate:
 
 
 class SignalBot:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings,
+                 user: Optional[TelegramClient] = None,
+                 bot: Optional[TelegramClient] = None) -> None:
         self.settings = settings
         self.store = Store(ROOT / "state.db")
         self.mt5 = make_broker(settings)
@@ -54,6 +56,8 @@ class SignalBot:
         self._pending_updates: dict[int, PendingUpdate] = {}
         self._update_counter = 0
         self._mt5_failures = 0
+        self._channel_handler = None
+        self._reconcile_task: Optional[asyncio.Task] = None
 
         self.vision: Optional[VisionReader] = None
         if settings.vision.enabled:
@@ -68,11 +72,12 @@ class SignalBot:
 
         session_dir = ROOT / "sessions"
         session_dir.mkdir(exist_ok=True)
-        self.user = TelegramClient(
+        # پنل تلگرامی کلاینت‌ها را خودش می‌سازد و به ربات می‌دهد
+        self.user = user or TelegramClient(
             str(session_dir / "user"), settings.telegram.api_id, settings.telegram.api_hash
         )
-        self.bot: Optional[TelegramClient] = None
-        if settings.telegram.bot_token:
+        self.bot: Optional[TelegramClient] = bot
+        if bot is None and settings.telegram.bot_token:
             self.bot = TelegramClient(
                 str(session_dir / "control_bot"),
                 settings.telegram.api_id,
@@ -342,43 +347,7 @@ class SignalBot:
             if owner and event.sender_id != owner:
                 await event.answer("اجازه‌ی دسترسی نداری", alert=True)
                 return
-            data = event.data.decode()
-
-            if data.startswith("upd:"):
-                _, raw_token, raw_signal = data.split(":")
-                pending = self._pending_updates.pop(int(raw_token), None)
-                if pending is None:
-                    await event.answer("این دستور منقضی شده", alert=True)
-                    return
-                if raw_signal == "0":
-                    await event.edit("❌ اعمال نشد.")
-                    return
-                await event.answer("در حال اعمال…")
-                await self._apply_update(int(raw_signal), pending.update)
-                return
-
-            action, _, raw_id = data.partition(":")
-            signal_id = int(raw_id)
-            approval = self._approvals.pop(signal_id, None)
-            if approval is None:
-                await event.answer("این سیگنال منقضی شده یا قبلاً پاسخ داده شده", alert=True)
-                return
-
-            if action == "no":
-                self.store.set_signal_status(signal_id, "declined")
-                await event.edit(f"❌ رد شد.\n\n{approval.signal.summary()}")
-                return
-
-            await event.answer("در حال اجرا…")
-            try:
-                # نقشه را دوباره می‌سازیم تا با قیمت لحظه‌ی تایید بخواند
-                plan = await asyncio.to_thread(self.executor.build_plan, approval.signal)
-            except BrokerError as exc:
-                self.store.set_signal_status(signal_id, "failed")
-                await event.edit(f"❌ در لحظه‌ی تایید اجرا ممکن نبود: {exc}")
-                return
-            await event.edit(f"⏳ در حال ارسال…\n\n{plan.describe()}")
-            await self._execute(plan, signal_id)
+            await self.handle_callback(event)
 
         @self.bot.on(events.NewMessage(pattern=r"^/(start|id)"))
         async def on_id(event):  # noqa: ANN001
@@ -392,17 +361,7 @@ class SignalBot:
         async def on_status(event):  # noqa: ANN001
             if owner and event.sender_id != owner:
                 return
-            info = await asyncio.to_thread(self.mt5.account)
-            positions = await asyncio.to_thread(self.mt5.positions)
-            pendings = await asyncio.to_thread(self.mt5.pending_orders)
-            pnl = await asyncio.to_thread(self.mt5.realized_pnl_today)
-            await event.reply(
-                f"{'⏸ متوقف' if self.paused else '▶️ فعال'} | حالت: {self.settings.trading.mode}\n"
-                f"بالانس: {info.balance:,.2f} {info.currency}\n"
-                f"اکوییتی: {info.equity:,.2f}\n"
-                f"سود/زیان امروز: {pnl:,.2f}\n"
-                f"پوزیشن باز: {len(positions)} | پندینگ: {len(pendings)}"
-            )
+            await event.reply(await self.status_text())
 
         @self.bot.on(events.NewMessage(pattern=r"^/(pause|resume)"))
         async def on_toggle(event):  # noqa: ANN001
@@ -416,19 +375,74 @@ class SignalBot:
         async def on_close_all(event):  # noqa: ANN001
             if owner and event.sender_id != owner:
                 return
-            positions = await asyncio.to_thread(self.mt5.positions)
-            if not positions:
-                await event.reply("پوزیشن بازی وجود ندارد")
+            await event.reply(await self.close_all())
+
+    async def handle_callback(self, event) -> None:  # noqa: ANN001
+        """دکمه‌های تایید سیگنال و انتخاب پوزیشن (بدون بررسی مالک)."""
+        data = event.data.decode()
+
+        if data.startswith("upd:"):
+            _, raw_token, raw_signal = data.split(":")
+            pending = self._pending_updates.pop(int(raw_token), None)
+            if pending is None:
+                await event.answer("این دستور منقضی شده", alert=True)
                 return
-            results = []
-            for position in positions:
-                try:
-                    await asyncio.to_thread(self.mt5.close, position.ticket, 1.0)
-                    self.store.set_trade_status(int(position.ticket), "closed")
-                    results.append(f"✅ #{position.ticket}")
-                except BrokerError as exc:
-                    results.append(f"❌ #{position.ticket}: {exc}")
-            await event.reply("\n".join(results))
+            if raw_signal == "0":
+                await event.edit("❌ اعمال نشد.")
+                return
+            await event.answer("در حال اعمال…")
+            await self._apply_update(int(raw_signal), pending.update)
+            return
+
+        action, _, raw_id = data.partition(":")
+        signal_id = int(raw_id)
+        approval = self._approvals.pop(signal_id, None)
+        if approval is None:
+            await event.answer("این سیگنال منقضی شده یا قبلاً پاسخ داده شده", alert=True)
+            return
+
+        if action == "no":
+            self.store.set_signal_status(signal_id, "declined")
+            await event.edit(f"❌ رد شد.\n\n{approval.signal.summary()}")
+            return
+
+        await event.answer("در حال اجرا…")
+        try:
+            # نقشه را دوباره می‌سازیم تا با قیمت لحظه‌ی تایید بخواند
+            plan = await asyncio.to_thread(self.executor.build_plan, approval.signal)
+        except BrokerError as exc:
+            self.store.set_signal_status(signal_id, "failed")
+            await event.edit(f"❌ در لحظه‌ی تایید اجرا ممکن نبود: {exc}")
+            return
+        await event.edit(f"⏳ در حال ارسال…\n\n{plan.describe()}")
+        await self._execute(plan, signal_id)
+
+    async def status_text(self) -> str:
+        info = await asyncio.to_thread(self.mt5.account)
+        positions = await asyncio.to_thread(self.mt5.positions)
+        pendings = await asyncio.to_thread(self.mt5.pending_orders)
+        pnl = await asyncio.to_thread(self.mt5.realized_pnl_today)
+        return (
+            f"{'⏸ متوقف' if self.paused else '▶️ فعال'} | حالت: {self.settings.trading.mode}\n"
+            f"بالانس: {info.balance:,.2f} {info.currency}\n"
+            f"اکوییتی: {info.equity:,.2f}\n"
+            f"سود/زیان امروز: {pnl:,.2f}\n"
+            f"پوزیشن باز: {len(positions)} | پندینگ: {len(pendings)}"
+        )
+
+    async def close_all(self) -> str:
+        positions = await asyncio.to_thread(self.mt5.positions)
+        if not positions:
+            return "پوزیشن بازی وجود ندارد"
+        results = []
+        for position in positions:
+            try:
+                await asyncio.to_thread(self.mt5.close, position.ticket, 1.0)
+                self.store.set_trade_status(int(position.ticket), "closed")
+                results.append(f"✅ #{position.ticket}")
+            except BrokerError as exc:
+                results.append(f"❌ #{position.ticket}: {exc}")
+        return "\n".join(results)
 
     # ------------------------------------------------------------ background
 
@@ -465,26 +479,46 @@ class SignalBot:
     # ----------------------------------------------------------------- start
 
     async def run(self) -> None:
-        await asyncio.to_thread(self.mt5.connect)
-
         if self.bot is not None:
             await self.bot.start(bot_token=self.settings.telegram.bot_token)
             self._register_control_handlers()
             log.info("پنل کنترل آماده است")
 
         await self.user.start()
+        try:
+            await self.start_engine()
+        except BrokerError as exc:
+            raise SystemExit(f"اتصال به بروکر ناموفق بود: {exc}") from exc
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        await self.user.run_until_disconnected()
+
+    async def start_engine(self) -> str:
+        """اتصال به بروکر و شروع گوش دادن به کانال. عنوان کانال را برمی‌گرداند.
+
+        خطای بروکر به صورت BrokerError و کانالِ پیدانشده به صورت ValueError
+        بالا می‌رود تا پنل بتواند آن را به کاربر نشان دهد.
+        """
+        await asyncio.to_thread(self.mt5.connect)
+
         source = self.settings.telegram.source_channel
         try:
-            entity = await self.user.get_entity(source)
+            try:
+                entity = await self.user.get_entity(source)
+            except ValueError:
+                # آیدی عددی فقط وقتی شناخته می‌شود که در حافظه‌ی نشست باشد؛
+                # خواندن لیست چت‌ها آن را دوباره پر می‌کند
+                await self.user.get_dialogs()
+                entity = await self.user.get_entity(source)
         except Exception as exc:  # noqa: BLE001
-            raise SystemExit(
+            await asyncio.to_thread(self.mt5.shutdown)
+            raise ValueError(
                 f"کانال «{source}» پیدا نشد ({exc}). "
                 f"با اجرای  python tools/list_chats.py  آیدی درست را پیدا کن."
             ) from exc
 
-        self.user.add_event_handler(
-            self.on_channel_message, events.NewMessage(chats=entity)
-        )
+        self._channel_handler = events.NewMessage(chats=entity)
+        self.user.add_event_handler(self.on_channel_message, self._channel_handler)
         title = getattr(entity, "title", str(source))
         log.info("در حال گوش دادن به: %s", title)
         vision_note = (
@@ -497,8 +531,18 @@ class SignalBot:
             f"{vision_note}"
         )
 
-        asyncio.create_task(self._reconcile_loop())
-        await self.user.run_until_disconnected()
+        self._reconcile_task = asyncio.create_task(self._reconcile_loop())
+        return title
+
+    async def stop_engine(self) -> None:
+        """گوش دادن به کانال را قطع می‌کند و اتصال بروکر را می‌بندد."""
+        if self._channel_handler is not None:
+            self.user.remove_event_handler(self.on_channel_message, self._channel_handler)
+            self._channel_handler = None
+        if self._reconcile_task is not None:
+            self._reconcile_task.cancel()
+            self._reconcile_task = None
+        await asyncio.to_thread(self.cleanup)
 
     def cleanup(self) -> None:
         try:

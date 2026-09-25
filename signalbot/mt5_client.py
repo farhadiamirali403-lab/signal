@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
